@@ -6,16 +6,16 @@ import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.LocalDateTime;
 
-@Getter
-@Setter
+@Document(collection = "tokens")
+@Data
 @NoArgsConstructor
 @AllArgsConstructor
-@Document(collection = "tokens")
 public class AttendanceToken {
     @Id
     private String token;
     private String classId;
-    private String teacherId;   // 🔹 NEW
+    private String teacherId;
     private LocalDateTime createdAt;
+     private Double teacherLat;   // Add this
+    private Double teacherLon;  
 }
-

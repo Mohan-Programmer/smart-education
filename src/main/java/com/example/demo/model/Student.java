@@ -1,19 +1,22 @@
 package com.example.demo.model;
 
-import lombok.*;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
-@Getter
-@Setter
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Document(collection = "students")
+@Data
 @NoArgsConstructor
 @AllArgsConstructor
-@Document(collection = "students")
 public class Student {
     @Id
-    private String id;         // studentId
-    private String rollNo;     // e.g., 21CSE001
-    private String name;       // Student name
-    private String classId;    // Which class this student belongs to
-    private String deviceId;   // For device binding (optional)
+    private String id;
+    private String rollNo;
+    private String name;
+    private String classId;
+    private String deviceId;  // Optional: For device binding
 }
+

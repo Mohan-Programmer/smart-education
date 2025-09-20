@@ -1,13 +1,7 @@
 package com.example.demo.service;
 
-import com.example.demo.model.AttendanceAlert;
-import com.example.demo.model.AttendanceRecord;
-import com.example.demo.model.AttendanceToken;
-import com.example.demo.model.Student;
-import com.example.demo.repository.AttendanceAlertRepository;
-import com.example.demo.repository.AttendanceRecordRepository;
-import com.example.demo.repository.AttendanceTokenRepository;
-import com.example.demo.repository.StudentRepository;
+import com.example.demo.model.*;
+import com.example.demo.repository.*;
 import com.example.demo.dto.TeacherDashboardResponse;
 import com.google.zxing.*;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
@@ -26,84 +20,56 @@ import java.util.*;
 @Service
 public class AttendanceService {
 
-    @Autowired
-    private StudentRepository studentRepo;
+    @Autowired private StudentRepository studentRepo;
+    @Autowired private AttendanceAlertRepository alertRepo;
+    @Autowired private AttendanceTokenRepository tokenRepo;
+    @Autowired private AttendanceRecordRepository recordRepo;
 
-    @Autowired
-    private AttendanceAlertRepository alertRepo;
+    private final double CLASS_RADIUS_METERS = 30;
 
-    @Autowired
-    private AttendanceTokenRepository tokenRepo;
-
-    @Autowired
-    private AttendanceRecordRepository recordRepo;
-
-    // Classroom coordinates (example: can be fetched from DB)
-    private final double CLASS_LAT = 28.7041; // Delhi latitude
-    private final double CLASS_LON = 77.1025; // Delhi longitude
-    private final double CLASS_RADIUS_METERS = 30; // 30m radius
-
-    /**
-     * Generate unique token and save to DB
-     */
-    public AttendanceToken generateAttendanceToken(String classId, String teacherId) {
+    // 1️⃣ Generate unique token with teacher coordinates
+    public AttendanceToken generateAttendanceToken(String classId, String teacherId, Double teacherLat, Double teacherLon) {
         String token = UUID.randomUUID().toString();
-        AttendanceToken attendanceToken = new AttendanceToken(token, classId, teacherId, LocalDateTime.now());
+        AttendanceToken attendanceToken = new AttendanceToken(token, classId, teacherId, LocalDateTime.now(), teacherLat, teacherLon);
         tokenRepo.save(attendanceToken);
         return attendanceToken;
     }
 
-    /**
-     * Generate QR Code image (PNG bytes)
-     */
+    // 2️⃣ Generate QR Code (PNG bytes)
     public byte[] generateQrCode(String token, int width, int height) throws Exception {
         Map<EncodeHintType, Object> hints = new HashMap<>();
         hints.put(EncodeHintType.CHARACTER_SET, "UTF-8");
 
-        BitMatrix matrix = new MultiFormatWriter().encode(
-                token, BarcodeFormat.QR_CODE, width, height, hints);
-
+        BitMatrix matrix = new MultiFormatWriter().encode(token, BarcodeFormat.QR_CODE, width, height, hints);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         MatrixToImageWriter.writeToStream(matrix, "PNG", out);
         return out.toByteArray();
     }
 
-    /**
-     * Save an alert
-     */
+    // 3️⃣ Save alert
     private void createAlert(String studentId, String classId, String message, String severity) {
-        AttendanceAlert alert = new AttendanceAlert(
-                null, studentId, classId, message, severity, LocalDateTime.now()
-        );
+        AttendanceAlert alert = new AttendanceAlert(null, studentId, classId, message, severity, LocalDateTime.now());
         alertRepo.save(alert);
     }
 
-    /**
-     * Geo-fencing check
-     */
-    private boolean isWithinClassroom(double studentLat, double studentLon,
-                                      double classLat, double classLon, double radiusMeters) {
+    // 4️⃣ Geo-fencing check
+    private boolean isWithinClassroom(double studentLat, double studentLon, double centerLat, double centerLon, double radiusMeters) {
         double earthRadius = 6371000; // meters
-        double dLat = Math.toRadians(studentLat - classLat);
-        double dLon = Math.toRadians(studentLon - classLon);
+        double dLat = Math.toRadians(studentLat - centerLat);
+        double dLon = Math.toRadians(studentLon - centerLon);
 
         double a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                   Math.cos(Math.toRadians(classLat)) * Math.cos(Math.toRadians(studentLat)) *
+                   Math.cos(Math.toRadians(centerLat)) * Math.cos(Math.toRadians(studentLat)) *
                    Math.sin(dLon/2) * Math.sin(dLon/2);
 
         double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
         double distance = earthRadius * c;
-
         return distance <= radiusMeters;
     }
 
-    /**
-     * ✅ Unified validateTokenWithSecurity method
-     * Handles: token validation, expiry, duplicate, device binding, geo-fencing
-     */
+    // 5️⃣ Validate QR token + device + geo + duplicate
     public String validateTokenWithSecurity(String token, String studentId, String classId,
-                                            String submittedDeviceId,
-                                            Double submittedLat, Double submittedLon) {
+                                            String submittedDeviceId, Double submittedLat, Double submittedLon) {
 
         Optional<AttendanceToken> optionalToken = tokenRepo.findById(token);
         if (optionalToken.isEmpty()) {
@@ -125,55 +91,50 @@ public class AttendanceService {
             return "❌ Token not valid for this class";
         }
 
-        // Duplicate check
+        // Duplicate attendance check
         LocalDate today = LocalDate.now();
         LocalDateTime startOfDay = today.atStartOfDay();
         LocalDateTime endOfDay = today.atTime(LocalTime.MAX);
-
-        List<AttendanceRecord> existing = recordRepo.findByStudentAndClassAndDateRange(
-                studentId, classId, startOfDay, endOfDay
-        );
-
+        List<AttendanceRecord> existing = recordRepo.findByStudentAndClassAndDateRange(studentId, classId, startOfDay, endOfDay);
         if (!existing.isEmpty()) {
             createAlert(studentId, classId, "Duplicate attendance attempt", "LOW");
-            return "⚠️ Attendance already marked for student " + studentId;
+            return "⚠️ Attendance already marked";
         }
 
-        // Fetch student details
-        String studentName = "Unknown";
+        // Fetch student
         Optional<Student> studentOpt = studentRepo.findById(studentId);
+        String studentName = "Unknown";
         if (studentOpt.isPresent()) {
-            studentName = studentOpt.get().getName();
+            Student student = studentOpt.get();
+            studentName = student.getName();
 
             // Device binding check
-            if (submittedDeviceId != null && !submittedDeviceId.equals(studentOpt.get().getDeviceId())) {
+            if (submittedDeviceId != null && !submittedDeviceId.equals(student.getDeviceId())) {
                 createAlert(studentId, classId, "Device mismatch", "HIGH");
             }
 
-            // Geo-fencing check
+            // Geo-fencing check using teacher's coordinates
             if (submittedLat != null && submittedLon != null &&
-                !isWithinClassroom(submittedLat, submittedLon, CLASS_LAT, CLASS_LON, CLASS_RADIUS_METERS)) {
-                createAlert(studentId, classId, "Outside classroom", "MEDIUM");
+                !isWithinClassroom(submittedLat, submittedLon, stored.getTeacherLat(), stored.getTeacherLon(), CLASS_RADIUS_METERS)) {
+                createAlert(studentId, classId, "Outside teacher's location", "MEDIUM");
             }
         }
 
-        // Save new attendance record
-        AttendanceRecord record = new AttendanceRecord(
-                null, studentId, studentName, classId, LocalDateTime.now()
-        );
+        // Save attendance
+        AttendanceRecord record = new AttendanceRecord(null, studentId, studentName, classId, LocalDateTime.now());
         recordRepo.save(record);
 
         return "✅ Attendance marked for student " + studentName;
     }
 
-    // ---------- Remaining methods ----------
-
+    // 6️⃣ Get attendance report for a class
     public List<AttendanceRecord> getAttendanceReport(String classId, LocalDate date) {
         LocalDateTime startOfDay = date.atStartOfDay();
         LocalDateTime endOfDay = date.atTime(LocalTime.MAX);
         return recordRepo.findAllByClassAndDateRange(classId, startOfDay, endOfDay);
     }
 
+    // 7️⃣ Get live attendance count
     public long getLiveCount(String classId) {
         LocalDate today = LocalDate.now();
         LocalDateTime startOfDay = today.atStartOfDay();
@@ -181,10 +142,12 @@ public class AttendanceService {
         return recordRepo.findAllByClassAndDateRange(classId, startOfDay, endOfDay).size();
     }
 
+    // 8️⃣ Get alerts for a class
     public List<AttendanceAlert> getAlertsForClass(String classId) {
         return alertRepo.findByClassId(classId);
     }
 
+    // 9️⃣ Teacher dashboard
     public TeacherDashboardResponse getTeacherDashboard(String classId, LocalDate date) {
         List<AttendanceRecord> report = getAttendanceReport(classId, date);
         long liveCount = getLiveCount(classId);
@@ -192,28 +155,91 @@ public class AttendanceService {
         return new TeacherDashboardResponse(liveCount, report, alerts);
     }
 
-    public TeacherDashboardResponse getTeacherDashboardPaged(
-            String classId, LocalDate date, Pageable pageable, String severityFilter) {
-
+    // 10️⃣ Teacher dashboard with paging
+    public TeacherDashboardResponse getTeacherDashboardPaged(String classId, LocalDate date, Pageable pageable, String severityFilter) {
         LocalDateTime startOfDay = date.atStartOfDay();
         LocalDateTime endOfDay = date.atTime(LocalTime.MAX);
 
-        Page<AttendanceRecord> reportPage =
-                recordRepo.findPagedByClassAndDateRange(classId, startOfDay, endOfDay, pageable);
-
-        Page<AttendanceAlert> alertPage;
-        if (severityFilter != null && !severityFilter.isEmpty()) {
-            alertPage = alertRepo.findByClassIdAndSeverity(classId, severityFilter, pageable);
-        } else {
-            alertPage = alertRepo.findByClassId(classId, pageable);
-        }
+        Page<AttendanceRecord> reportPage = recordRepo.findPagedByClassAndDateRange(classId, startOfDay, endOfDay, pageable);
+        Page<AttendanceAlert> alertPage = (severityFilter != null && !severityFilter.isEmpty()) ?
+                alertRepo.findByClassIdAndSeverity(classId, severityFilter, pageable) :
+                alertRepo.findByClassId(classId, pageable);
 
         long liveCount = getLiveCount(classId);
 
-        return new TeacherDashboardResponse(
-                liveCount,
-                reportPage.getContent(),
-                alertPage.getContent()
-        );
+        return new TeacherDashboardResponse(liveCount, reportPage.getContent(), alertPage.getContent());
     }
+
+    // 11️⃣ Get latest token for a class
+    public AttendanceToken getLatestTokenForClass(String classId) {
+        List<AttendanceToken> tokens = tokenRepo.findAll(); // Can filter by classId
+        return tokens.stream()
+                .filter(t -> t.getClassId().equals(classId))
+                .max(Comparator.comparing(AttendanceToken::getCreatedAt))
+                .orElse(null);
+    }
+
+
+    // In AttendanceService.java
+
+public String validateTokenWithSecurity(String token, String studentId, String classId,
+                                        String submittedDeviceId, Double submittedLat, Double submittedLon,
+                                        Double teacherLat, Double teacherLon) {
+
+    Optional<AttendanceToken> optionalToken = tokenRepo.findById(token);
+    if (optionalToken.isEmpty()) {
+        createAlert(studentId, classId, "Invalid QR attempt", "HIGH");
+        return "❌ Invalid QR code";
+    }
+
+    AttendanceToken stored = optionalToken.get();
+
+    // Expiry check (30 sec)
+    if (stored.getCreatedAt().plusSeconds(30).isBefore(LocalDateTime.now())) {
+        tokenRepo.deleteById(token);
+        createAlert(studentId, classId, "Tried with expired QR", "MEDIUM");
+        return "⏳ QR code expired";
+    }
+
+    if (!stored.getClassId().equals(classId)) {
+        createAlert(studentId, classId, "Token mismatch (wrong class)", "HIGH");
+        return "❌ Token not valid for this class";
+    }
+
+    // Duplicate attendance check
+    LocalDate today = LocalDate.now();
+    LocalDateTime startOfDay = today.atStartOfDay();
+    LocalDateTime endOfDay = today.atTime(LocalTime.MAX);
+    List<AttendanceRecord> existing = recordRepo.findByStudentAndClassAndDateRange(studentId, classId, startOfDay, endOfDay);
+    if (!existing.isEmpty()) {
+        createAlert(studentId, classId, "Duplicate attendance attempt", "LOW");
+        return "⚠️ Attendance already marked";
+    }
+
+    // Fetch student
+    Optional<Student> studentOpt = studentRepo.findById(studentId);
+    String studentName = "Unknown";
+    if (studentOpt.isPresent()) {
+        Student student = studentOpt.get();
+        studentName = student.getName();
+
+        // Device binding check
+        if (submittedDeviceId != null && !submittedDeviceId.equals(student.getDeviceId())) {
+            createAlert(studentId, classId, "Device mismatch", "HIGH");
+        }
+
+        // Geo-fencing check (use teacher location instead of class location)
+        if (submittedLat != null && submittedLon != null && teacherLat != null && teacherLon != null &&
+            !isWithinClassroom(submittedLat, submittedLon, teacherLat, teacherLon, CLASS_RADIUS_METERS)) {
+            createAlert(studentId, classId, "Outside classroom", "MEDIUM");
+        }
+    }
+
+    // Save attendance
+    AttendanceRecord record = new AttendanceRecord(null, studentId, studentName, classId, LocalDateTime.now());
+    recordRepo.save(record);
+
+    return "✅ Attendance marked for student " + studentName;
+}
+
 }
