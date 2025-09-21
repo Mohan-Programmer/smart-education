@@ -1,3 +1,4 @@
+// com.example.demo.service.AttendanceService.java
 package com.example.demo.service;
 
 import com.example.demo.model.*;
@@ -113,10 +114,11 @@ public class AttendanceService {
                 createAlert(studentId, classId, "Device mismatch", "HIGH");
             }
 
-            // Geo-fencing check using teacher's coordinates
-            if (submittedLat != null && submittedLon != null &&
+            // Geo-fencing check (using teacher's coordinates from the stored token)
+            if (submittedLat != null && submittedLon != null && stored.getTeacherLat() != null && stored.getTeacherLon() != null &&
                 !isWithinClassroom(submittedLat, submittedLon, stored.getTeacherLat(), stored.getTeacherLon(), CLASS_RADIUS_METERS)) {
-                createAlert(studentId, classId, "Outside teacher's location", "MEDIUM");
+                createAlert(studentId, classId, "Outside classroom", "MEDIUM");
+                return "❌ Outside the classroom location";
             }
         }
 
@@ -170,76 +172,8 @@ public class AttendanceService {
         return new TeacherDashboardResponse(liveCount, reportPage.getContent(), alertPage.getContent());
     }
 
-    // 11️⃣ Get latest token for a class
+    // 11️⃣ Get latest token for a class (Optimized)
     public AttendanceToken getLatestTokenForClass(String classId) {
-        List<AttendanceToken> tokens = tokenRepo.findAll(); // Can filter by classId
-        return tokens.stream()
-                .filter(t -> t.getClassId().equals(classId))
-                .max(Comparator.comparing(AttendanceToken::getCreatedAt))
-                .orElse(null);
+        return tokenRepo.findTopByClassIdOrderByCreatedAtDesc(classId).orElse(null);
     }
-
-
-    // In AttendanceService.java
-
-public String validateTokenWithSecurity(String token, String studentId, String classId,
-                                        String submittedDeviceId, Double submittedLat, Double submittedLon,
-                                        Double teacherLat, Double teacherLon) {
-
-    Optional<AttendanceToken> optionalToken = tokenRepo.findById(token);
-    if (optionalToken.isEmpty()) {
-        createAlert(studentId, classId, "Invalid QR attempt", "HIGH");
-        return "❌ Invalid QR code";
-    }
-
-    AttendanceToken stored = optionalToken.get();
-
-    // Expiry check (30 sec)
-    if (stored.getCreatedAt().plusSeconds(30).isBefore(LocalDateTime.now())) {
-        tokenRepo.deleteById(token);
-        createAlert(studentId, classId, "Tried with expired QR", "MEDIUM");
-        return "⏳ QR code expired";
-    }
-
-    if (!stored.getClassId().equals(classId)) {
-        createAlert(studentId, classId, "Token mismatch (wrong class)", "HIGH");
-        return "❌ Token not valid for this class";
-    }
-
-    // Duplicate attendance check
-    LocalDate today = LocalDate.now();
-    LocalDateTime startOfDay = today.atStartOfDay();
-    LocalDateTime endOfDay = today.atTime(LocalTime.MAX);
-    List<AttendanceRecord> existing = recordRepo.findByStudentAndClassAndDateRange(studentId, classId, startOfDay, endOfDay);
-    if (!existing.isEmpty()) {
-        createAlert(studentId, classId, "Duplicate attendance attempt", "LOW");
-        return "⚠️ Attendance already marked";
-    }
-
-    // Fetch student
-    Optional<Student> studentOpt = studentRepo.findById(studentId);
-    String studentName = "Unknown";
-    if (studentOpt.isPresent()) {
-        Student student = studentOpt.get();
-        studentName = student.getName();
-
-        // Device binding check
-        if (submittedDeviceId != null && !submittedDeviceId.equals(student.getDeviceId())) {
-            createAlert(studentId, classId, "Device mismatch", "HIGH");
-        }
-
-        // Geo-fencing check (use teacher location instead of class location)
-        if (submittedLat != null && submittedLon != null && teacherLat != null && teacherLon != null &&
-            !isWithinClassroom(submittedLat, submittedLon, teacherLat, teacherLon, CLASS_RADIUS_METERS)) {
-            createAlert(studentId, classId, "Outside classroom", "MEDIUM");
-        }
-    }
-
-    // Save attendance
-    AttendanceRecord record = new AttendanceRecord(null, studentId, studentName, classId, LocalDateTime.now());
-    recordRepo.save(record);
-
-    return "✅ Attendance marked for student " + studentName;
-}
-
 }

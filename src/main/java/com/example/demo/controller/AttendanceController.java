@@ -1,3 +1,4 @@
+// com.example.demo.controller.AttendanceController.java
 package com.example.demo.controller;
 
 import com.example.demo.model.*;
@@ -42,12 +43,10 @@ public class AttendanceController {
             @RequestParam String classId,
             @RequestParam String deviceId,
             @RequestParam double latitude,
-            @RequestParam double longitude,
-            @RequestParam double teacherLat,
-            @RequestParam double teacherLon) {
+            @RequestParam double longitude) { // ❌ Removed teacherLat and teacherLon
 
         String result = attendanceService.validateTokenWithSecurity(
-            token, studentId, classId, deviceId, latitude, longitude, teacherLat, teacherLon
+            token, studentId, classId, deviceId, latitude, longitude
         );
 
         return ResponseEntity.ok(result);
@@ -98,10 +97,10 @@ public class AttendanceController {
         return ResponseEntity.ok(dashboard);
     }
 
-    // 8️⃣ Get latest QR token
-    @GetMapping("/class/{classId}/latest-qr")
-    public ResponseEntity<AttendanceToken> getLatestQr(@PathVariable String classId) {
-        AttendanceToken latestToken = attendanceService.getLatestTokenForClass(classId);
-        return ResponseEntity.ok(latestToken);
-    }
+    // 8️⃣ Get latest QR token - ❌ THIS ENDPOINT IS NO LONGER NEEDED, THE FRONTEND WILL DIRECTLY REQUEST THE QR IMAGE.
+    // @GetMapping("/class/{classId}/latest-qr")
+    // public ResponseEntity<AttendanceToken> getLatestQr(@PathVariable String classId) {
+    //     AttendanceToken latestToken = attendanceService.getLatestTokenForClass(classId);
+    //     return ResponseEntity.ok(latestToken);
+    // }
 }
